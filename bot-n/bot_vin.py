@@ -38,7 +38,17 @@ class AccessMiddleware(BaseMiddleware):
         data: Dict[str, Any]
     ) -> Any:
         if event.from_user.id not in ALLOWED_USER_IDS:
-            print(f"🚫 Отклонен доступ для пользователя {event.from_user.id} ({event.from_user.username})")
+            username = event.from_user.username or "без username"
+            full_name = f"{event.from_user.first_name or ''} {event.from_user.last_name or ''}".strip()
+            print(f"🚫 Отклонен доступ | ID: {event.from_user.id} | @{username} | {full_name}")
+            
+            # Отправляем сообщение пользователю
+            await event.answer(
+                "⛔ *Доступ запрещён*\n\n"
+                "Этот бот доступен только авторизованным пользователям\\.\n\n"
+                "_Для получения доступа свяжитесь с администратором\\._",
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
             return
         return await handler(event, data)
 
@@ -66,58 +76,74 @@ def format_client_card(data: dict) -> str:
     docs_info = data.get('docs', {})
     photos = data.get('photos', [])
 
-    text = "📄 **Результаты поиска:**\n\n"
+    text = "✅ *Результаты поиска*\n\n"
     
     if car_info:
-        text += "🚗 **Автомобиль**\n"
+        text += "🚗 *АВТОМОБИЛЬ*\n"
         for key, value in car_info.items():
-            text += f" \\- _{escape_markdown(key)}:_ `{escape_markdown(value or 'N/A')}`\n"
+            text += f"• _{escape_markdown(key)}:_ `{escape_markdown(value or 'N/A')}`\n"
         text += "\n"
 
     if driver_info:
-        text += "👤 **Водитель**\n"
+        text += "👤 *ВОДИТЕЛЬ*\n"
         for key, value in driver_info.items():
             if key.lower() == 'телефон':
                 # Функция уже возвращает экранированный номер
                 formatted_phone = format_phone_number(value)
                 # Выводим без ```, так как он уже экранирован
-                text += f" \\- _{escape_markdown(key)}:_ {formatted_phone}\n"
+                text += f"• _{escape_markdown(key)}:_ {formatted_phone}\n"
             else:
-                text += f" \\- _{escape_markdown(key)}:_ `{escape_markdown(value or 'N/A')}`\n"
+                text += f"• _{escape_markdown(key)}:_ `{escape_markdown(value or 'N/A')}`\n"
         text += "\n"
 
     if docs_info:
-        text += "📋 **Документы**\n"
+        text += "📋 *ДОКУМЕНТЫ*\n"
         for key, value in docs_info.items():
-            text += f" \\- _{escape_markdown(key)}:_ `{escape_markdown(value or 'N/A')}`\n"
+            text += f"• _{escape_markdown(key)}:_ `{escape_markdown(value or 'N/A')}`\n"
     
     if photos:
-        text += "\n🖼️ **Фото**\n"
+        text += "\n🖼️ *ФОТОГРАФИИ*\n"
         for i, link in enumerate(photos):
             # Ссылки в Markdown не нужно экранировать
-            text += f" [Фото {i+1}]({link})\n"
+            text += f"[📷 Фото {i+1}]({link})\n"
 
     return text
 
 # --- Клавиатура ---
 main_kb = ReplyKeyboardMarkup(
-    keyboard=[[KeyboardButton(text="Проверить авто")]],
-    resize_keyboard=True
+    keyboard=[[KeyboardButton(text="🚗 Проверить авто")]],
+    resize_keyboard=True,
+    input_field_placeholder="Введите номер или VIN"
 )
 
 # --- Обработчики ---
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
+    
+    welcome_text = (
+        "👋 *Добро пожаловать в БДА Поиск\\!*\n\n"
+        "🔍 Я помогу вам найти информацию об автомобиле "
+        "по номеру или VIN\\-коду\\.\n\n"
+        "Нажмите кнопку *\"🚗 Проверить авто\"* или сразу введите "
+        "номер автомобиля или VIN\\-код\\."
+    )
+    
     await message.answer(
-        "Здравствуйте\\! 👋\n\nНажмите кнопку 'Проверить авто', чтобы начать поиск\\.",
+        welcome_text,
         reply_markup=main_kb,
         parse_mode=ParseMode.MARKDOWN_V2
     )
 
-@router.message(F.text.lower() == "проверить авто")
+@router.message(F.text == "🚗 Проверить авто")
 async def start_search(message: Message, state: FSMContext):
-    await message.answer("Пожалуйста, введите номер автомобиля или VIN-код:")
+    await message.answer(
+        "📋 *Введите данные для поиска:*\n\n"
+        "• Номер автомобиля \\(например: 0000AA01\\)\n"
+        "• VIN\\-код автомобиля\n\n"
+        "_Просто отправьте текстом\\._",
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
     await state.set_state(SearchState.waiting_for_input)
 
 
@@ -126,18 +152,65 @@ async def handle_vin_or_plate(message: Message, state: FSMContext):
     search_query = message.text.strip()
     await state.clear()
     
-    wait_message = await message.answer("🔍 Ищу информацию, пожалуйста, подождите...", reply_markup=main_kb)
+    wait_message = await message.answer(
+        "🔍 *Идёт поиск\\.\\.\\.*\n\n"
+        "_Пожалуйста, подождите\\.\\.\\._",
+        reply_markup=main_kb,
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
     
     search_result = await asyncio.to_thread(scraper.get_client_card_info, search_query)
     
     await wait_message.delete()
 
     if search_result.get("error"):
-        await message.answer(f"😕 *Ошибка:* {escape_markdown(search_result['error'])}", parse_mode=ParseMode.MARKDOWN_V2)
+        await message.answer(
+            f"❌ *Ошибка поиска*\n\n"
+            f"_{escape_markdown(search_result['error'])}_\n\n"
+            "Попробуйте ещё раз или проверьте корректность введённых данных\\.",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
         return
         
     formatted_text = format_client_card(search_result)
     await message.answer(formatted_text, parse_mode=ParseMode.MARKDOWN_V2)
+
+@router.message(F.text)
+async def handle_direct_input(message: Message, state: FSMContext):
+    """Обработчик прямого ввода номера или VIN без использования кнопки"""
+    search_query = message.text.strip()
+    
+    # Простая проверка: если текст содержит буквы и цифры, считаем это потенциальным номером/VIN
+    if len(search_query) >= 4 and any(c.isdigit() for c in search_query):
+        wait_message = await message.answer(
+            "🔍 *Идёт поиск\\.\\.\\.*\n\n"
+            "_Пожалуйста, подождите\\.\\.\\._",
+            reply_markup=main_kb,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        
+        search_result = await asyncio.to_thread(scraper.get_client_card_info, search_query)
+        
+        await wait_message.delete()
+
+        if search_result.get("error"):
+            await message.answer(
+                f"❌ *Ошибка поиска*\n\n"
+                f"_{escape_markdown(search_result['error'])}_\n\n"
+                "Попробуйте ещё раз или проверьте корректность введённых данных\\.",
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            return
+            
+        formatted_text = format_client_card(search_result)
+        await message.answer(formatted_text, parse_mode=ParseMode.MARKDOWN_V2)
+    else:
+        await message.answer(
+            "❓ *Не понял запрос*\n\n"
+            "Пожалуйста, нажмите кнопку *\"🚗 Проверить авто\"* "
+            "или отправьте номер автомобиля\\.",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
 
 # --- Запуск бота ---
 async def main():
@@ -147,13 +220,24 @@ async def main():
     dp.message.outer_middleware.register(AccessMiddleware())
     dp.include_router(router)
     
-    print(f"Бот запущен! Разрешен доступ для ID: {ALLOWED_USER_IDS}")
+    print("\n" + "="*50)
+    print("🚀 БДА Поиск Бот запущен!")
+    print("="*50)
+    print(f"✅ Разрешен доступ для ID: {ALLOWED_USER_IDS}")
+    print(f"🔐 Авторизованных пользователей: {len(ALLOWED_USER_IDS)}")
+    print("="*50 + "\n")
+    
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("Бот остановлен.")
+        print("\n" + "="*50)
+        print("⛔ Бот остановлен пользователем")
+        print("="*50)
