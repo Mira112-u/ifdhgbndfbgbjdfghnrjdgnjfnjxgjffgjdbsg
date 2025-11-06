@@ -1,0 +1,20 @@
+# Core bot framework
+aiogram>=3.0.0,<4.0.0
+
+# Database (async SQLAlchemy 2.x with aiosqlite for SQLite support)
+SQLAlchemy>=2.0.0,<3.0.0
+aiosqlite>=0.19.0
+
+# HTTP requests and HTML parsing
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+aiohttp>=3.9.0
+
+# Configuration management
+python-dotenv>=1.0.0
+
+# Optional: for PostgreSQL support (uncomment if needed)
+# asyncpg>=0.29.0
+
+# Optional: for MySQL support (uncomment if needed)
+# aiomysql>=0.2.0
